@@ -106,15 +106,17 @@ What this script does:
 
 * Iterates over `train_set/*.avi` and `test_set/*.avi`
 * For each frame, runs **MediaPipe Pose** to get 33 body keypoints (x, y, z, visibility → 132-dim)
+* **Although MediaPipe outputs 132 dimensions, only the xyz coordinates are used (visibility is discarded), so the effective feature size is 99-dim per frame**
+  (this matches the skeleton model input)
 * Uses a **forward fill strategy**:
 
   * If a frame has no detection (occlusion or failure), it reuses the last valid frame instead of zeroing, which avoids artificial jumps.
-* Saves each video as `skeleton_data/{train|test}/CIDxx_SIDxx_VIDxx.npy` with shape `(T, 132)`.
+* Saves each video as `skeleton_data/{train|test}/CIDxx_SIDxx_VIDxx.npy` with raw shape `(T, 132)`, which is later internally reshaped to `(T, 99)` during model training.
 
 Design rationale:
 
 * Forward fill makes the time series smoother and more realistic for LSTM.
-* Keeping all frames preserves temporal resolution; downsampling is done later in the skeleton model.
+* Keeping all frames preserves temporal resolution; downsampling and trimming to a fixed 100-frame sequence are handled inside the skeleton model.
 
 ---
 
@@ -137,10 +139,10 @@ What happens inside:
    * Loads `.npy` skeleton files from `skeleton_data/train`.
    * Normalises per video:
 
-     * Reshape `(T, 132) → (T, 33, 4)` and keep only xyz coordinates `(T, 33, 3)`.
+     * Reshape `(T, 132) → (T, 33, 4)` and keep only xyz coordinates `(T, 33, 3)` **(visibility is discarded, giving 99-dim per frame)**.
      * Root-centering: hip center (average of joints 23 and 24) is moved to origin.
      * Shoulder scaling: divide coordinates by distance between left and right shoulder (joints 11 and 12), making sequences scale-invariant.
-   * Pads or crops to fixed length `T = 100`:
+   * Pads or crops to fixed length **`T = 100`**:
 
      * Long sequences: centered crop.
      * Short sequences: zero-pad at the beginning.
@@ -151,9 +153,10 @@ What happens inside:
 
 2. **Model (****`LightweightCNNLSTM`****)**
 
-   * Input: sequence of shape `[batch, 100, 99]` (33 joints × 3 coords).
+   * Input: sequence of shape **`[batch, 100, 99]`** (33 joints × 3 coords).
    * 1D CNN along the temporal axis:
 
+     * Before convolution, the input is **permuted to `[batch, 99, 100]`** so that joint features act as channels.
      * `Conv1d(99, 64, kernel_size=3, padding=1)` + BatchNorm + ReLU + Dropout.
      * No pooling to preserve time length.
    * Bidirectional LSTM:
@@ -162,7 +165,7 @@ What happens inside:
    * Multi-head self-attention:
 
      * `embed_dim = 2*hidden_size`, `num_heads = 4`.
-     * Lets the model focus on discriminative time steps (e.g. handover moment).
+     * Lets the model focus on discriminative time steps (e.g. the handover moment).
    * Mean pooling + Linear classifier → 30 classes.
 
 3. **Training**
@@ -176,7 +179,6 @@ Typical outcome:
 
 * Skeleton-only validation accuracy around 70–75% (depending on random seed).
 * Strong at capturing motion patterns and robust to lighting and background.
-
 ---
 
 ### Step 3 – Train the RGB Stream
@@ -201,12 +203,13 @@ What happens inside:
      * Loads `train_set/{video_id}.avi`.
      * Resizes frames to `128×128`.
      * Converts BGR → RGB.
-     * Uniformly samples 16 frames from the full sequence.
+     * Uniformly samples **16 frames** from the full sequence
+       *(a fixed short clip is used to keep training efficient while still capturing global context)*.
    * Converts to tensor with shape `[3, 16, 128, 128]`.
    * Normalizes using **Kinetics-400** mean and std:
 
      * `mean = [0.432, 0.394, 0.376]`
-     * `std = [0.228, 0.221, 0.217]`
+     * `std  = [0.228, 0.221, 0.217]`
 
 2. **Model**
 
@@ -239,30 +242,46 @@ Typical outcome:
 ### Step 4 – Two-Stream Late Fusion (Final CSV for Submission)
 
 ```bash
-python predict_multimodel_final.py
+python multimodel_fusion.py
 ```
 
 This script:
 
 1. Loads label mapping from `annotations/train_set_labels.csv` to ensure consistent class indices.
+
 2. Loads:
 
    * `best_model_v3.pth` → skeleton stream (`LightweightCNNLSTM`).
    * `best_model_rgb.pth` → RGB stream (`r2plus1d_18`).
+
 3. Iterates over **test videos** in `test_set/`:
 
    * For each `CIDxx_SIDxx_VIDxx.avi`:
 
-     * Loads corresponding skeleton file `skeleton_data/test/CIDxx_SIDxx_VIDxx.npy`.
-     * Runs both streams to get probability distributions:
+     * Loads the corresponding skeleton file `skeleton_data/test/CIDxx_SIDxx_VIDxx.npy`.
+     * Runs both streams to obtain probability distributions:
 
        * `p_skel = softmax(skel_logits)`
-       * `p_rgb = softmax(rgb_logits)`
-     * Computes final probability:
+       * `p_rgb  = softmax(rgb_logits)`
 
-       * `p_final = 0.8 * p_rgb + 0.2 * p_skel`
-     * Takes `argmax(p_final)` as the predicted class.
-   * Writes `(video_name, label_name)` to `test_set_labels_fusion.csv`.
+4. Performs **late fusion**:
+
+   * Instead of using a fixed weight, the script searches for the best fusion weight
+     **α ∈ [0, 1] (101 grid steps)** using a validation split.
+
+   * The final probability is computed as:
+
+     ```
+     p_final = α * p_rgb + (1 − α) * p_skel
+     ```
+
+   * The selected α (best on validation) is then applied to all test samples.
+
+5. Writes `(video_name, label_name)` to:
+
+```
+test_set_labels.csv
+```
 
 This CSV is the final submission file for the leaderboard.
 
@@ -274,22 +293,23 @@ This CSV is the final submission file for the leaderboard.
 python analyze_fusion.py
 ```
 
-What it does:
+What this script does:
 
-* Takes the full training set, randomly splits off 20% as a validation subset (with shuffling and fixed seed).
+* Creates a validation split from the full training set (with shuffling and a fixed random seed).
 * Runs inference for:
 
   * Skeleton-only model
   * RGB-only model
-  * Fused model with the same weights (0.8 / 0.2)
-* Computes accuracy for each stream and for the fusion.
-* Produces a **confusion matrix** heatmap `fusion_analysis.png`:
+  * **Fusion model using the same fusion weight α selected in the late-fusion pipeline**
+    (or re-estimated on the validation subset)
+* Computes the validation accuracy for each stream.
+* Generates a **confusion matrix** heatmap `fusion_analysis.png`:
 
   * X/Y axes: action classes.
-  * Concentration along the diagonal reflects good performance.
-  * Off-diagonal patterns can reveal where the model confuses similar actions.
+  * Strong diagonal patterns indicate good class separation.
+  * Off-diagonal clusters help identify confusing action pairs.
 
-In our experiments, the fusion model consistently achieves **over 90% validation accuracy**, exceeding both individual streams and the baseline referenced in the original paper.
+In our experiments, the fusion model consistently achieves **over 90% validation accuracy**, outperforming either single-stream model.
 
 ---
 

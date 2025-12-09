@@ -9,21 +9,20 @@ import numpy as np
 import torchvision.models.video as models
 from torch.cuda.amp import autocast, GradScaler
 
-# --- ⚙️ 配置区域 (Scratch Version) ---
+# --- ⚙️ Configuration Area (Scratch Version) ---
 CSV_FILE = "annotations/train_set_labels.csv"
 VIDEO_FOLDER = "train_set" 
 BATCH_SIZE = 4              
 ACCUMULATION_STEPS = 4      
 RESIZE_H, RESIZE_W = 128, 128 
 NUM_FRAMES = 16             
-LEARNING_RATE = 0.01        # ⚠️ 从零训练通常需要稍大的初始学习率 (0.001 -> 0.01) 或者是保持不变，这里为了稳妥保持 0.001 也行，但通常 scratch 需要大一点 LR 来逃离初始点
-                            # 建议：为了控制变量，先保持 0.001，如果不动再调大。这里暂设 0.001
+LEARNING_RATE = 0.01
 LEARNING_RATE = 0.001
 EPOCHS = 45                 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- 1. 视频数据集 ---
+# --- 1. Video Dataset ---
 class IndustrialVideoDataset(Dataset):
     def __init__(self, csv_path, video_dir):
         self.labels_df = pd.read_csv(csv_path, header=None)
@@ -32,7 +31,7 @@ class IndustrialVideoDataset(Dataset):
         unique_labels = sorted(self.labels_df.iloc[:, 1].unique())
         self.label_to_int = {name: i for i, name in enumerate(unique_labels)}
         self.num_classes = len(unique_labels)
-        print(f"📊 [Scratch] 视频数据集: {len(self.labels_df)} 样本, {self.num_classes} 类别")
+        print(f"📊 [Scratch] Video Dataset: {len(self.labels_df)} samples, {self.num_classes} classes")
 
     def __len__(self):
         return len(self.labels_df)
@@ -53,6 +52,7 @@ class IndustrialVideoDataset(Dataset):
         if len(frames) == 0:
             return np.zeros((NUM_FRAMES, RESIZE_H, RESIZE_W, 3), dtype=np.uint8)
 
+        # Uniformly sample 16 frames
         indices = np.linspace(0, len(frames) - 1, NUM_FRAMES).astype(int)
         sampled_frames = np.array([frames[i] for i in indices])
         return sampled_frames
@@ -67,17 +67,17 @@ class IndustrialVideoDataset(Dataset):
         buffer = torch.FloatTensor(buffer).permute(3, 0, 1, 2)
         buffer = buffer / 255.0 
         
-        # 即使从零训练，使用 Kinetics 的统计数据做归一化通常也是安全的，
-        # 或者使用 0.5/0.5。为了控制变量，我们保持一致。
+        # Even when training from scratch, using Kinetics mean/std normalization is usually safe.
+        # Alternatively: use mean=0.5/std=0.5. To keep variables controlled, we keep the same normalization as pretrained settings.
         mean = torch.tensor([0.432, 0.394, 0.376]).view(3, 1, 1, 1)
         std = torch.tensor([0.228, 0.221, 0.217]).view(3, 1, 1, 1)
         buffer = (buffer - mean) / std
 
         return buffer, torch.tensor(label, dtype=torch.long)
 
-# --- 2. 训练主流程 ---
+# --- 2. Main Training Loop ---
 if __name__ == "__main__":
-    print(f"🚀 RGB 从零训练 (Scratch Training) | 设备: {device}")
+    print(f"🚀 RGB Training from Scratch | Device: {device}")
     
     torch.cuda.empty_cache()
     train_dataset = IndustrialVideoDataset(CSV_FILE, VIDEO_FOLDER)
@@ -89,8 +89,8 @@ if __name__ == "__main__":
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     
-    # 🧠 [核心修改] weights=None (不加载预训练权重)
-    print("🧠 初始化 R2Plus1D (Random Initialization)...")
+    # 🧠 Core Difference: weights=None (no pretrained weights)
+    print("🧠 Initializing R2Plus1D (Random Initialization)...")
     model = models.r2plus1d_18(weights=None) 
     
     model.fc = nn.Linear(model.fc.in_features, train_dataset.num_classes)
@@ -101,7 +101,7 @@ if __name__ == "__main__":
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5, factor=0.5)
     scaler = GradScaler()
 
-    print("🔥 开始训练 (Scratch)...")
+    print("🔥 Starting Scratch Training...")
     best_acc = 0.0
     
     for epoch in range(EPOCHS):
@@ -128,7 +128,7 @@ if __name__ == "__main__":
             if (i+1) % 50 == 0:
                 print(f"  Step {i+1}/{len(train_loader)} | Loss: {loss.item()*ACCUMULATION_STEPS:.4f}")
         
-        # 验证
+        # Validation
         model.eval()
         correct = 0
         total = 0
@@ -149,8 +149,8 @@ if __name__ == "__main__":
         
         if val_acc > best_acc:
             best_acc = val_acc
-            # 💾 保存为 scratch 版本
+            # 💾 Save scratch version
             torch.save(model.state_dict(), "best_model_rgb_scratch.pth")
-            print(f"  💾 新高分: {best_acc:.2f}%")
+            print(f"  💾 New Best Accuracy: {best_acc:.2f}%")
 
-    print(f"🏆 Scratch RGB 最终结果: {best_acc:.2f}%")
+    print(f"🏆 Final Scratch RGB Accuracy: {best_acc:.2f}%")

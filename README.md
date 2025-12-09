@@ -514,6 +514,102 @@ These results underline the importance of integrating **context (RGB)** and **mo
 
 ---
 
+## **4.4 YOLO11 Embedding + XGBoost (Video-Level Classification)**
+
+In addition to frame-level YOLO classification and YOLO-Pose, we implemented a third object-centric pipeline that converts an entire video into a single fixed-dimensional feature vector using **YOLO11 embeddings**, followed by **XGBoost** for video-level action classification.
+
+This method focuses on capturing **object appearance**, **scene cues**, and **global visual context**.
+
+---
+
+### **Pipeline Summary**
+
+### **1) Frame Sampling**
+
+For each video, frames are sampled at a fixed interval (e.g., every 5 frames).
+
+### **2) Per-Frame Embedding Extraction**
+
+Each sampled frame is passed through:
+
+```
+YOLO11n-cls → model.embed()
+```
+
+which outputs a **feature embedding vector** of dimension `D`.
+
+So for a video you obtain:
+
+```
+frame_embeddings: [T, D]
+```
+
+### **3) Temporal Aggregation → Video-Level Feature**
+
+We compute simple but effective statistics across time:
+
+* **mean(D)**
+* **max(D)**
+* **std(D)**
+
+The three vectors are concatenated:
+
+```
+video_feature = concat(mean, max, std)  →  shape = [3D]
+```
+
+This produces one fixed-length feature vector **per video**, regardless of video length.
+
+### **4) Save Features**
+
+For all videos:
+
+```
+video_features.npy  (N × 3D)
+video_labels.npy    (N)
+video_names.npy
+```
+
+---
+
+### **5) Train XGBoost Classifier**
+
+A multi-class XGBoost model is trained on the aggregated features:
+
+* Input: `3D`-dimensional video feature
+* Output: predicted action class (0–29)
+
+Class imbalance is handled using:
+
+* **undersampling** (default)
+  or
+* **oversampling**
+
+The classifier learns object-centric patterns such as:
+
+* presence or shape of a tool
+* scene layout
+* coarse human posture information indirectly captured in embeddings
+
+---
+
+### **6) Performance Notes**
+
+* Works well when actions are distinguished by **objects** rather than motion.
+* Weaker for motion-dominated classes (e.g., handover variations).
+* Typically outperformed by the Two-Stream RGB + Skeleton model.
+* Useful as an **independent baseline** and for feature interpretability.
+
+---
+
+### **Relation to Two-Stream Fusion**
+
+This YOLO11 + XGBoost approach further confirms that:
+
+* **object appearance alone is not sufficient** for reliable action recognition
+* combining **motion cues (skeleton)** and **context (RGB)** provides the best overall performance
+
+---
 ## 5. Justification of Design Choices (for Justification Rubric)
 
 Here we explicitly justify why we chose this architecture and compare it to alternatives, following the marking scheme expectations for a high justification score.

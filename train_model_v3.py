@@ -8,18 +8,18 @@ import os
 import random
 from sklearn.utils.class_weight import compute_class_weight
 
-# --- ⚙️ 配置区域 ---
+# --- ⚙️ Configuration Area ---
 CSV_FILE = "annotations/train_set_labels.csv"
 DATA_FOLDER = "skeleton_data/train"
 BATCH_SIZE = 32
 LEARNING_RATE = 0.001
 EPOCHS = 80
 FIXED_LENGTH = 100
-INPUT_SIZE = 99     # 回归纯净的 XYZ (33*3)
+INPUT_SIZE = 99     # Pure XYZ (33*3), removing angle features
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- 1. 数据集 (保留 V4/V7 中好的归一化，移除有问题的角度特征) ---
+# --- 1. Dataset (Keep good normalization from V4/V7, remove problematic angle features) ---
 class SkeletonDatasetV8(Dataset):
     def __init__(self, csv_path, data_dir, sequence_length, augment=False):
         self.labels_df = pd.read_csv(csv_path, header=None)
@@ -39,11 +39,11 @@ class SkeletonDatasetV8(Dataset):
         data = raw_data.reshape(frames, 33, 4)
         xyz = data[:, :, :3]
         
-        # 1. Root Centering (位置归一化)
+        # 1. Root Centering (Position Normalization)
         root = (xyz[:, 23, :] + xyz[:, 24, :]) / 2
         xyz = xyz - root.reshape(frames, 1, 3)
         
-        # 2. Shoulder Scaling (尺度归一化)
+        # 2. Shoulder Scaling (Scale Normalization)
         left_shoulder = xyz[:, 11, :]
         right_shoulder = xyz[:, 12, :]
         dist = np.sqrt(np.sum((left_shoulder - right_shoulder)**2, axis=1))
@@ -53,16 +53,16 @@ class SkeletonDatasetV8(Dataset):
         return xyz_norm.reshape(frames, 99)
 
     def apply_augmentation(self, data):
-        # 轻量级增强，防止过拟合
-        if random.random() > 0.5: # 噪声
+        # Lightweight augmentation to reduce overfitting
+        if random.random() > 0.5:  # Add noise
             data = data + np.random.normal(0, 0.002, data.shape)
             
-        if random.random() > 0.6: # 随机遮挡
+        if random.random() > 0.6:  # Random occlusion
             temp = data.reshape(-1, 33, 3)
-            # 随机把某一只手设为0
-            if random.random() > 0.5: # 左手
+            # Randomly zero out one hand
+            if random.random() > 0.5:  # Left hand
                 temp[:, [11,13,15], :] = 0
-            else: # 右手
+            else:  # Right hand
                 temp[:, [12,14,16], :] = 0
             data = temp.reshape(-1, 99)
             
@@ -94,23 +94,23 @@ class SkeletonDatasetV8(Dataset):
 
         return torch.FloatTensor(data), torch.tensor(label, dtype=torch.long)
 
-# --- 2. 轻量化模型 (Lightweight CNN-LSTM) ---
+# --- 2. Lightweight Model (Lightweight CNN-LSTM) ---
 class LightweightCNNLSTM(nn.Module):
     def __init__(self, input_size, hidden_size, num_classes):
         super(LightweightCNNLSTM, self).__init__()
         
-        # 1. 浅层 CNN: 仅用于局部特征提取，不改变时间长度
-        # 保持 kernel_size=3, padding=1, 这样 seq_len 不变
+        # 1. Shallow CNN: Used only for local feature extraction, does not change temporal length
+        # Keep kernel_size=3, padding=1 so seq_len remains unchanged
         self.cnn = nn.Sequential(
             nn.Conv1d(input_size, 64, kernel_size=3, padding=1),
             nn.BatchNorm1d(64),
             nn.ReLU(),
             nn.Dropout(0.1) 
-            # ❌ 移除了 Pooling 层，保留完整时间细节
+            # ❌ Removed Pooling layer to preserve full temporal resolution
         )
         
-        # 2. LSTM: 负责时序 (hidden_size 128 足够了，不要 256)
-        # 输入维度是 CNN 的输出 64
+        # 2. LSTM: Handles temporal modeling (hidden_size 128 is sufficient; no need for 256)
+        # Input dimension is CNN output = 64
         self.lstm = nn.LSTM(64, hidden_size, num_layers=2, 
                             batch_first=True, bidirectional=True, dropout=0.3)
         
@@ -124,9 +124,9 @@ class LightweightCNNLSTM(nn.Module):
         # x: [batch, seq, 99]
         
         # CNN
-        c_in = x.permute(0, 2, 1) # -> [batch, 99, seq]
-        c_out = self.cnn(c_in)    # -> [batch, 64, seq]
-        lstm_in = c_out.permute(0, 2, 1) # -> [batch, seq, 64]
+        c_in = x.permute(0, 2, 1)  # -> [batch, 99, seq]
+        c_out = self.cnn(c_in)     # -> [batch, 64, seq]
+        lstm_in = c_out.permute(0, 2, 1)  # -> [batch, seq, 64]
         
         # LSTM
         lstm_out, _ = self.lstm(lstm_in)
@@ -140,9 +140,9 @@ class LightweightCNNLSTM(nn.Module):
         out = self.fc(pooled)
         return out
 
-# --- 3. 训练主控 ---
+# --- 3. Training Controller ---
 if __name__ == "__main__":
-    print(f"🚀 V8 瘦身版启动 | 移除冗余参数，回归本质 | 设备: {device}")
+    print(f"🚀 V8 Slim Version Start | Removed redundant parameters, back to essentials | Device: {device}")
     
     train_full = SkeletonDatasetV8(CSV_FILE, DATA_FOLDER, FIXED_LENGTH, augment=True)
     val_full = SkeletonDatasetV8(CSV_FILE, DATA_FOLDER, FIXED_LENGTH, augment=False)
@@ -166,17 +166,16 @@ if __name__ == "__main__":
     num_classes = len(train_full.label_to_int)
     model = LightweightCNNLSTM(input_size=INPUT_SIZE, hidden_size=128, num_classes=num_classes).to(device)
     
-    # 打印参数量对比
+    # Print parameter count
     total_params = sum(p.numel() for p in model.parameters())
-    print(f"📉 模型参数量: {total_params:,} (之前 V7 是 320万)")
+    print(f"📉 Model Parameter Count: {total_params:,} (Previous V7 was 3.2 million)")
     
-    # 恢复稳定的 Scheduler
+    # Stable Scheduler
     criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
-    # 使用 ReduceLROnPlateau，这是最稳健的选择
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=5)
 
-    print("🔥 开始训练...")
+    print("🔥 Training Starts...")
     best_acc = 0.0
     
     for epoch in range(EPOCHS):
@@ -216,6 +215,6 @@ if __name__ == "__main__":
         if val_acc > best_acc:
             best_acc = val_acc
             torch.save(model.state_dict(), "best_model_v3.pth")
-            print(f"  💾 新高分! (Best: {best_acc:.2f}%)")
+            print(f"  💾 New Best Score! (Best: {best_acc:.2f}%)")
 
-    print(f"\n🏆 V8 最终结果: {best_acc:.2f}%")
+    print(f"\n🏆 V8 Final Result: {best_acc:.2f}%")

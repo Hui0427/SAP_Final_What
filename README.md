@@ -374,12 +374,14 @@ Typical results:
 * Fusion improves scratch RGB alone.
 * However, the final accuracy remains noticeably below the fusion model using pretrained RGB.
 * This ablation confirms the benefit of using pretrained 3D CNN features in the final submission pipeline.
-
 ---
 
 # 4. YOLO-Based Object-Centric Pipelines (Alternative Approaches)
 
-In addition to the Two-Stream fusion model, we implemented two YOLO-based pipelines to explore object-centric reasoning for industrial action recognition. These methods offer complementary insights, especially for actions distinguished primarily by the tool involved.
+In addition to the Two-Stream fusion model, we implemented two YOLO-based pipelines to explore object-centric reasoning for industrial action recognition.
+These methods act as alternative baselines and provide complementary insights, especially for actions distinguished by the tool being carried.
+
+While these pipelines do not outperform the Two-Stream architecture, they strengthen our justification by showing the limits of object-only or 2D-pose-only feature modeling.
 
 ---
 
@@ -387,24 +389,88 @@ In addition to the Two-Stream fusion model, we implemented two YOLO-based pipeli
 
 Folder: `yolo/`
 
-This pipeline treats action recognition as a frame-level classification problem, followed by video-level aggregation.
+This pipeline treats action recognition as a frame-level YOLO11 classification problem, followed by video-level aggregation.
 
-**Pipeline summary:**
+### **Pipeline summary**
 
 1. **YOLO Classification per Frame**
-   A YOLO11 classification model processes each frame to identify action-related visual cues.
+   A YOLO11 classification model is applied on every frame to extract class probabilities representing tool or object cues.
 
 2. **Temporal Aggregation**
    Two strategies are implemented:
 
-   * **Average Probability Voting**: mean softmax scores across all frames
-   * **Majority Voting**: majority class across frame predictions
+   * **Average Probability Voting** — mean softmax scores across all frames
+   * **Majority Voting** — most frequent predicted class
 
 3. **Video-Level Output**
-   Produces a prediction file:
-   **`video_predictions.csv`**, containing video names, aggregated scores, and final predicted labels.
+   The results are aggregated into:
 
-Detailed steps, model requirements, and run commands are provided in `ReadmeForYolo.md`.
+   ```
+   video_predictions.csv
+   ```
+
+   containing video names, aggregated scores, and final predicted labels.
+
+---
+
+### **Extended Variant: YOLO11 Video-Level Features + XGBoost**
+
+We further explored a video-level classifier by extracting global features using YOLO11 classification outputs:
+
+**Scripts (from supplementary experiments)** 
+
+```
+python extract_video_features_yolo11_cls.py
+python train_xgboost_video_cls.py
+```
+
+This produces:
+
+* `video_features.npy` — `[N, 3*C]` feature matrix
+* `video_labels.npy` — class IDs
+* `video_names.npy` — video identifiers
+
+The features consist of mean/max/std statistics over YOLO class probability vectors.
+XGBoost and GBDT models were trained on these features; accuracy reached ~56%, showing that raw YOLO class probabilities provide limited motion information.
+
+---
+
+### **Improved Variant: YOLO11 Embedding + XGBoost (Higher Performance)**
+
+To obtain stronger video-level representations, we used the penultimate-layer embedding from YOLO11:
+
+```
+python extract_video_features_yolo11_embed.py
+```
+
+For each frame:
+
+* Extract embedding vector (e.g., 512-dim or model-dependent)
+* Aggregate across the video via mean / max / std → `[3D]`
+
+Then train XGBoost:
+
+```
+python train_xgboost_video_cls.py
+```
+
+After tuning (reduced depth, stronger regularization, PCA preserving 95% variance),
+validation accuracy improved to **~65%**, but remained lower than the Two-Stream approach.
+This confirms that object-centric features alone are insufficient for full action understanding.
+
+---
+
+### **Predicting Folder Actions with YOLO11 + XGBoost**
+
+The pipeline can perform batch prediction:
+
+```
+python predict_folder_actions_embed.py \
+  --folder <test_set_path> \
+  --label_csv annotations/train_set_labels.csv
+```
+
+Outputs a CSV containing predicted labels + confidence vectors for each video.
 
 ---
 
@@ -412,33 +478,41 @@ Detailed steps, model requirements, and run commands are provided in `ReadmeForY
 
 Folder: `yolo_and_lstm/`
 
-This variant models human–object interaction through 2D keypoint sequences extracted by YOLOv11-Pose.
+This variant models human–object interaction using 2D pose keypoints extracted by YOLOv11-Pose.
 
-**Pipeline summary:**
+### **Pipeline summary**
 
 1. **Keypoint Extraction**
-   YOLOv11-Pose outputs 2D human pose keypoints per frame.
+   YOLOv11-Pose returns 2D joint locations for each frame.
 
 2. **Sequence Normalization**
-   Each video is resampled to a fixed length (e.g., 64 frames) to standardize inputs.
+   Each video is resampled to a fixed length (e.g., 64 frames).
 
-3. **Temporal Classification**
-   A Bi-directional LSTM learns motion patterns across the keypoint sequence.
+3. **Temporal Modeling**
+   A bidirectional LSTM classifies the normalized pose sequence.
 
-Although functional, this approach yields lower accuracy than both the Two-Stream model and the YOLO voting method. It is therefore included only as an exploratory branch.
+While functional, this approach underperforms both the Two-Stream model and the YOLO classification+voting pipeline, due to:
+
+* lack of 3D or depth cues
+* no modeling of tools or object types
+* sensitivity to occlusion and keypoint jitter
+
+Thus, this branch is included only as an exploratory baseline.
 
 ---
 
 ## 4.3 Comparison With Two-Stream Fusion
 
-| Method                       | Uses RGB? | Uses Skeleton?       | Uses Object Cues?            | Temporal Modeling | Performance | Notes                  |
-| ---------------------------- | --------- | -------------------- | ---------------------------- | ----------------- | ----------- | ---------------------- |
-| Two-Stream Fusion            | Yes       | Yes                  | Implicit (RGB)               | CNN + LSTM        | **Highest** | Final submitted method |
-| YOLO Classification + Voting | Yes       | No                   | **Explicit tools & objects** | Weak (voting)     | Medium      | Independent CSV        |
-| YOLO Pose + LSTM             | No        | Yes (YOLO keypoints) | Partial (pose only)          | LSTM              | Low         | Experimental only      |
+| Method                       | Uses RGB? | Uses Skeleton?       | Uses Object Cues?            | Temporal Modeling | Performance | Notes                       |
+| ---------------------------- | --------- | -------------------- | ---------------------------- | ----------------- | ----------- | --------------------------- |
+| Two-Stream Fusion            | Yes       | Yes                  | Implicit (RGB)               | CNN + LSTM        | **Highest** | Final submitted method      |
+| YOLO Classification + Voting | Yes       | No                   | **Explicit tools & objects** | Weak (voting)     | Medium      | Independent CSV             |
+| YOLO Pose + LSTM             | No        | Yes (YOLO keypoints) | Partial (pose only)          | LSTM              | Low         | Experimental only           |
+| YOLO11 Embedding + XGBoost   | Yes       | No                   | Stronger object cues         | None (static)     | Medium      | ~65% accuracy (video-level) |
 
-These alternative pipelines support our architectural justification by demonstrating that object-centric detection alone is insufficient, and that integrating both **context (RGB)** and **motion (skeleton)** yields the strongest performance.
+These results underline the importance of integrating **context (RGB)** and **motion (skeleton)** for full action recognition, and reinforce the superiority of our Two-Stream fusion architecture over purely object-centric pipelines.
 
+---
 
 ## 5. Justification of Design Choices (for Justification Rubric)
 

@@ -33,12 +33,12 @@ The two-stream fusion achieves over 90% local validation accuracy and significan
 
 ## 2. Repository Structure
 
-Expected folder layout at the project root:
+For clarity, the full project root includes all major components and experimental branches:
 
 ```text
 Project_Root/
 ├── annotations/
-│   └── train_set_labels.csv         # [CIDxx_SIDxx_VIDxx, ActionName, LabelID]
+│   └── train_set_labels.csv
 │
 ├── train_set/                       # Training videos (.avi)
 ├── test_set/                        # Test videos (.avi)
@@ -48,19 +48,28 @@ Project_Root/
 │   └── test/
 │
 ├── batch_extract.py                 # Step 1: Pose extraction (MediaPipe)
-├── train_model_v3.py                # Step 2: Train skeleton stream
-├── rgb_model.py                     # Step 3: Train RGB stream (R(2+1)D)
-├── predict_multimodel_final.py      # Step 4: Two-stream late fusion for test set
+├── train_model_v3.py                # Step 2: Train Skeleton model
+├── rgb_model.py                     # Step 3: Train RGB R(2+1)D model
+├── predict_multimodal_final.py      # Step 4: Two-stream late fusion
 ├── analyze_fusion.py                # Step 5: Local evaluation + confusion matrix
 │
-├── train_rgb_scratch.py             # Ablation: RGB from scratch (no pretraining)
+├── train_rgb_scratch.py             # Ablation: RGB-from-scratch experiment
 ├── multimodel_scratch.py            # Ablation: Fusion search with scratch RGB
 │
-├── yolo/                            # YOLO-based object-centric pipeline
-│   ├── ReadmeForYolo.md             # How to run YOLO branch
-│   ├── …                            # YOLO config / scripts
+├── yolo/                            # YOLO classification + voting pipeline
+│   ├── ReadmeForYolo.md
+│   ├── classify_frame_yolo.py
+│   ├── generate_predictions.py
+│   ├── video_predictions.csv
+│   └── …
 │
-└── README.md                        # This file
+├── yolo_and_lstm/                   # YOLO-pose + LSTM temporal modeling
+│   ├── extract_keypoints_yolo11_pose.py
+│   ├── train_pose_lstm.py
+│   ├── skeleton_lstm_dataset.py
+│   └── …
+│
+└── README.md
 ```
 
 ---

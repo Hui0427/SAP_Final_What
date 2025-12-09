@@ -313,7 +313,7 @@ In our experiments, the fusion model consistently achieves **over 90% validation
 
 ---
 
-### Step 6 – Train RGB Stream from Scratch (Ablation)
+### Optional Step 6 – Train RGB Stream from Scratch (Ablation)
 
 ```bash
 python train_rgb_scratch.py
@@ -342,7 +342,7 @@ Typical outcome:
 
 ---
 
-### Step 7 – Fusion with Scratch RGB Stream (Ablation)
+### Optional Step 7 – Fusion with Scratch RGB Stream (Ablation)
 
 ```bash
 python multimodel_scratch.py

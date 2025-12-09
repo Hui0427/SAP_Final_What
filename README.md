@@ -391,6 +391,52 @@ Folder: `yolo/`
 
 This pipeline treats action recognition as a frame-level YOLO11 classification problem, followed by video-level aggregation.
 
+---
+
+### **Voting Strategies (with simple formulas)**
+
+We use two strategies to convert frame-level YOLO predictions into a video-level label:
+
+---
+
+### **1) Majority Voting**
+
+Take the class that appears most frequently among all frame predictions:
+
+[
+\hat{c} = \arg\max_c \sum_{i=1}^{N} \mathbf{1}(c_i = c)
+]
+
+Where:
+
+* ( c_i ) = predicted class for frame ( i )
+* ( N ) = number of sampled frames
+
+---
+
+### **2) Average Probability Voting**
+
+Average the softmax probabilities of all frames:
+
+[
+\bar{p}*k = \frac{1}{N} \sum*{i=1}^{N} p_{i,k}
+]
+
+Final prediction:
+
+[
+\hat{c} = \arg\max_k \bar{p}_k
+]
+
+Where:
+
+* ( p_{i,k} ) = probability of class ( k ) for frame ( i )
+
+
+These simple voting rules allow YOLO frame predictions to be aggregated into a stable video-level classification.
+
+---
+
 ### **Pipeline summary**
 
 1. **YOLO Classification per Frame**

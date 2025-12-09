@@ -8,29 +8,30 @@ import pandas as pd
 from ultralytics import YOLO
 from tqdm import tqdm
 
-# ========= 配置区域：按需修改 =========
+# ========= Configuration Section: modify as needed =========
 
-# YOLO11 分类权重
+# YOLO11 classification weights
 YOLO_WEIGHTS = "yolo11n-cls.pt"
 
-# 视频根目录（所有 .avi 存在的地方）
+# Root directory containing videos (all .avi files are stored here)
 VIDEO_ROOT = r"E:\A_KCL\Sensing and perception\dataset\train_set"
 
-# 标签 CSV 路径（三列：video_name, class_name, class_id）
-CSV_PATH =  r"E:\A_KCL\Sensing and perception\dataset\annotations\train_set_labels.csv"
+# Label CSV path (three columns: video_name, class_name, class_id)
+CSV_PATH = r"E:\A_KCL\Sensing and perception\dataset\annotations\train_set_labels.csv"
 
-# 每隔多少帧取一帧
+# Sample one frame every N frames
 FRAME_STEP = 5
 
-# 视频后缀
+# Video extension
 VIDEO_EXT = ".avi"
 
-# 输出文件
+# Output files
 OUT_FEATURES_PATH = "video_features.npy"
 OUT_LABELS_PATH = "video_labels.npy"
 OUT_VIDEO_NAMES_PATH = "video_names.npy"
 
-# 如果 CSV 有中文，一般是 gbk；若出错可以改成 "utf-8"
+# If the CSV contains Chinese characters, it may use GBK encoding;
+# change to "utf-8" if needed.
 CSV_ENCODING = "gbk"
 
 # ====================================
@@ -38,36 +39,40 @@ CSV_ENCODING = "gbk"
 
 def load_video_paths_and_labels(csv_path, video_root):
     """
-    读取 CSV，返回：
-      - video_paths: 视频绝对路径列表
-      - labels:      0-based 类别 id 列表（np.int64）
-      - video_names: 不带后缀的视频名列表
+    Read the CSV and return:
+      - video_paths: list of absolute video paths
+      - labels:      list of 0-based class IDs (np.int64)
+      - video_names: list of video names without extension
     """
     df = pd.read_csv(csv_path, encoding=CSV_ENCODING)
 
     for col in ["video_name", "class_name", "class_id"]:
         if col not in df.columns:
-            raise ValueError(f"CSV 必须包含列 'video_name', 'class_name', 'class_id'，"
-                             f"当前列名为：{df.columns.tolist()}")
+            raise ValueError(
+                f"CSV must contain columns 'video_name', 'class_name', 'class_id'. "
+                f"Current columns: {df.columns.tolist()}"
+            )
 
     video_paths = []
     labels = []
     video_names = []
 
     for _, row in df.iterrows():
-        v_name = str(row["video_name"])      # 不带后缀的视频名
-        cls_name = str(row["class_name"])    # 仅用于打印
+        v_name = str(row["video_name"])      # video name without extension
+        cls_name = str(row["class_name"])    # used only for logging
         cls_id_raw = int(row["class_id"])    # 1 ~ K
-        cls_id = cls_id_raw - 1              # 转成 0 ~ K-1
+        cls_id = cls_id_raw - 1              # convert to 0 ~ K-1
 
         if cls_id < 0:
-            raise ValueError(f"发现 class_id_raw={cls_id_raw} < 1，检查 CSV 标注是否正确！")
+            raise ValueError(
+                f"Detected class_id_raw={cls_id_raw} < 1. Please check your CSV annotations!"
+            )
 
         filename = v_name + VIDEO_EXT
         v_path = os.path.join(video_root, filename)
 
         if not os.path.exists(v_path):
-            print(f"[WARN] 视频不存在：{v_path} (class_name={cls_name}, class_id_raw={cls_id_raw})")
+            print(f"[WARN] Video not found: {v_path} (class_name={cls_name}, class_id_raw={cls_id_raw})")
             continue
 
         video_paths.append(v_path)
@@ -77,20 +82,20 @@ def load_video_paths_and_labels(csv_path, video_root):
     labels = np.array(labels, dtype=np.int64)
     video_names = np.array(video_names)
 
-    print(f"[INFO] 读取到 {len(video_paths)} 个有效视频。")
-    print(f"[INFO] 类别 id 范围（0-based）：min={labels.min()}, max={labels.max()}")
+    print(f"[INFO] Loaded {len(video_paths)} valid videos.")
+    print(f"[INFO] Class ID range (0-based): min={labels.min()}, max={labels.max()}")
 
     return video_paths, labels, video_names
 
 
 def extract_frame_embeddings_from_video(model, video_path, frame_step=5):
     """
-    对一个视频抽帧，并用 YOLO11 分类模型的 embed() 提取每帧的 embedding。
-    返回：frame_embs -> [T, D]（T 帧数, D embedding 维度）
+    Sample frames from a video and extract YOLO11 classification embeddings.
+    Returns: frame_embs -> [T, D] (T frames, D embedding dimension)
     """
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        print(f"[WARN] 无法打开视频：{video_path}")
+        print(f"[WARN] Cannot open video: {video_path}")
         return None
 
     frame_embs = []
@@ -102,12 +107,12 @@ def extract_frame_embeddings_from_video(model, video_path, frame_step=5):
             break
 
         if frame_idx % frame_step == 0:
-            # Ultralytics YOLO11 提供 model.embed() 直接返回特征向量
-            # 文档示例：embedding_vector = model.embed("image.jpg")
-            embs = model.embed(frame, verbose=False)   # list-like，长度=1
-            emb = embs[0]                              # Tensor shape: [D] 或 [1, D]
-            emb = emb.squeeze()                        # 去掉多余维度
-            emb = emb.detach().cpu().numpy()           # 转成 numpy [D]
+            # Ultralytics YOLO11 provides model.embed() which returns the feature vector
+            # Example in docs: embedding_vector = model.embed("image.jpg")
+            embs = model.embed(frame, verbose=False)   # list-like, length=1
+            emb = embs[0]                              # Tensor shape: [D] or [1, D]
+            emb = emb.squeeze()                        # remove extra dimension if any
+            emb = emb.detach().cpu().numpy()           # convert to numpy [D]
             frame_embs.append(emb)
 
         frame_idx += 1
@@ -115,7 +120,7 @@ def extract_frame_embeddings_from_video(model, video_path, frame_step=5):
     cap.release()
 
     if len(frame_embs) == 0:
-        print(f"[WARN] 视频没有成功提取任何 embedding：{video_path}")
+        print(f"[WARN] No embeddings extracted from video: {video_path}")
         return None
 
     frame_embs = np.stack(frame_embs, axis=0)  # [T, D]
@@ -124,8 +129,8 @@ def extract_frame_embeddings_from_video(model, video_path, frame_step=5):
 
 def aggregate_video_features(frame_embs):
     """
-    把 [T, D] 的帧 embedding 聚合成视频级特征：
-      - mean / max / std 拼在一起 -> [3D]
+    Aggregate [T, D] frame embeddings into a single video-level feature:
+      - concatenate mean / max / std  -> [3D]
     """
     mean_feat = frame_embs.mean(axis=0)   # [D]
     max_feat = frame_embs.max(axis=0)     # [D]
@@ -136,19 +141,19 @@ def aggregate_video_features(frame_embs):
 
 
 def main():
-    # 1. 加载 YOLO11 分类模型
-    print("[INFO] 加载 YOLO11 分类模型...")
+    # 1. Load YOLO11 classification model
+    print("[INFO] Loading YOLO11 classification model...")
     model = YOLO(YOLO_WEIGHTS)
 
-    # 2. 读取视频路径和标签
-    print("[INFO] 读取 CSV，加载视频列表和标签...")
+    # 2. Load video paths and labels from CSV
+    print("[INFO] Reading CSV and loading video list + labels...")
     video_paths, labels, video_names = load_video_paths_and_labels(CSV_PATH, VIDEO_ROOT)
 
     all_feats = []
     valid_labels = []
     valid_names = []
 
-    # 3. 遍历每个视频，抽帧 + 提取 embedding + 聚合
+    # 3. Iterate through each video: sampling + embed extraction + aggregation
     for v_path, label, name in tqdm(
         list(zip(video_paths, labels, video_names)),
         total=len(video_paths),
@@ -164,22 +169,22 @@ def main():
         valid_names.append(name)
 
     if len(all_feats) == 0:
-        print("[ERROR] 没有成功提取到任何视频特征，请检查路径/CSV/FRAME_STEP。")
+        print("[ERROR] No video features extracted. Please check paths/CSV/FRAME_STEP.")
         return
 
     all_feats = np.stack(all_feats, axis=0)           # [N, 3D]
     valid_labels = np.array(valid_labels, dtype=np.int64)
     valid_names = np.array(valid_names)
 
-    # 4. 保存
+    # 4. Save results
     np.save(OUT_FEATURES_PATH, all_feats)
     np.save(OUT_LABELS_PATH, valid_labels)
     np.save(OUT_VIDEO_NAMES_PATH, valid_names)
 
-    print(f"[INFO] 特征保存到：{OUT_FEATURES_PATH}，shape={all_feats.shape}")
-    print(f"[INFO] 标签保存到：{OUT_LABELS_PATH}，shape={valid_labels.shape}")
-    print(f"[INFO] 视频名保存到：{OUT_VIDEO_NAMES_PATH}，shape={valid_names.shape}")
-    print("[INFO] 完成。")
+    print(f"[INFO] Features saved to: {OUT_FEATURES_PATH}, shape={all_feats.shape}")
+    print(f"[INFO] Labels saved to: {OUT_LABELS_PATH}, shape={valid_labels.shape}")
+    print(f"[INFO] Video names saved to: {OUT_VIDEO_NAMES_PATH}, shape={valid_names.shape}")
+    print("[INFO] Done.")
 
 
 if __name__ == "__main__":

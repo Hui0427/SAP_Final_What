@@ -313,6 +313,70 @@ In our experiments, the fusion model consistently achieves **over 90% validation
 
 ---
 
+### Step 6 – Train RGB Stream from Scratch (Ablation)
+
+```bash
+python train_rgb_scratch.py
+```
+
+This script trains the RGB stream **without using any pretrained weights**.
+It serves as the ablation experiment to evaluate the importance of Kinetics-400 pretraining.
+
+What this script does:
+
+* Initializes the R(2+1)D-18 model randomly instead of using pretrained weights.
+* Uses the same dataset pipeline as `rgb_model.py` (16 uniform frames, 128×128 resolution, Kinetics normalization).
+* Trains the model from scratch on the 30 action classes.
+* Expected validation accuracy is significantly lower than the pretrained version, demonstrating that pretrained video features provide a strong boost in performance.
+
+Outputs:
+
+```text
+best_model_rgb_scratch.pth
+```
+
+Typical outcome:
+
+* Considerably lower accuracy than pretrained RGB.
+* Provides quantitative evidence supporting the choice of pretrained weights in the final fusion model.
+
+---
+
+### Step 7 – Fusion with Scratch RGB Stream (Ablation)
+
+```bash
+python multimodel_scratch.py
+```
+
+This script performs **late fusion using the scratch-trained RGB model** and the same skeleton model:
+
+1. Loads:
+
+   * `best_model_v3.pth` (skeleton stream)
+   * `best_model_rgb_scratch.pth` (RGB stream without pretraining)
+
+2. Runs a **grid search over fusion weights**
+   `α ∈ [0, 1]` (101 steps), identical to the process in `multimodel_fusion.py`.
+
+3. Evaluates the fusion accuracy on a validation subset.
+
+4. Reports:
+
+   * Best α value for scratch-fusion
+   * Accuracy of:
+
+     * Scratch RGB alone
+     * Skeleton alone
+     * Fusion (scratch RGB + skeleton)
+
+Typical results:
+
+* Fusion improves scratch RGB alone.
+* However, the final accuracy remains noticeably below the fusion model using pretrained RGB.
+* This ablation confirms the benefit of using pretrained 3D CNN features in the final submission pipeline.
+
+---
+
 # 4. YOLO-Based Object-Centric Pipelines (Alternative Approaches)
 
 In addition to the Two-Stream fusion model, we implemented two YOLO-based pipelines to explore object-centric reasoning for industrial action recognition. These methods offer complementary insights, especially for actions distinguished primarily by the tool involved.

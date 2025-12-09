@@ -172,12 +172,15 @@ if __name__ == "__main__":
     with torch.no_grad():
         for i, (skel_in, rgb_in, labels) in enumerate(val_loader):
             skel_in, rgb_in, labels = skel_in.to(device), rgb_in.to(device), labels.to(device)
-            
+
+            # Separate predictions
             skel_out = torch.softmax(skel_model(skel_in), dim=1)
             rgb_out = torch.softmax(rgb_model(rgb_in), dim=1)
-            
+
+            # Fusion
             fusion_out = (ALPHA_RGB * rgb_out) + (ALPHA_SKELETON * skel_out)
-            
+
+            # Statistics
             _, skel_pred = torch.max(skel_out, 1)
             _, rgb_pred = torch.max(rgb_out, 1)
             _, fusion_pred = torch.max(fusion_out, 1)
@@ -213,3 +216,4 @@ if __name__ == "__main__":
     plt.tight_layout()
     plt.savefig('fusion_analysis.png')
     print("✅ Fusion confusion matrix saved as fusion_analysis.png")
+

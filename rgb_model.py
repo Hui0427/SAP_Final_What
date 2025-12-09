@@ -9,11 +9,11 @@ import numpy as np
 import torchvision.models.video as models
 from torch.cuda.amp import autocast, GradScaler
 
-# --- ⚙️ 配置区域 ---
+# --- ⚙️ Configuration Area ---
 CSV_FILE = "annotations/train_set_labels.csv"
 VIDEO_FOLDER = "train_set" 
-BATCH_SIZE = 4              # 显存优化
-ACCUMULATION_STEPS = 4      # 梯度累积
+BATCH_SIZE = 4              # GPU memory optimization
+ACCUMULATION_STEPS = 4      # Gradient accumulation
 RESIZE_H, RESIZE_W = 128, 128 
 NUM_FRAMES = 16             
 LEARNING_RATE = 0.001
@@ -21,7 +21,7 @@ EPOCHS = 45
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- 1. 视频数据集 (已修复归一化bug) ---
+# --- 1. Video Dataset (Normalization bug fixed) ---
 class IndustrialVideoDataset(Dataset):
     def __init__(self, csv_path, video_dir):
         self.labels_df = pd.read_csv(csv_path, header=None)
@@ -30,7 +30,7 @@ class IndustrialVideoDataset(Dataset):
         unique_labels = sorted(self.labels_df.iloc[:, 1].unique())
         self.label_to_int = {name: i for i, name in enumerate(unique_labels)}
         self.num_classes = len(unique_labels)
-        print(f"📊 视频数据集: {len(self.labels_df)} 样本, {self.num_classes} 类别")
+        print(f"📊 Video dataset: {len(self.labels_df)} samples, {self.num_classes} classes")
 
     def __len__(self):
         return len(self.labels_df)
@@ -51,7 +51,7 @@ class IndustrialVideoDataset(Dataset):
         if len(frames) == 0:
             return np.zeros((NUM_FRAMES, RESIZE_H, RESIZE_W, 3), dtype=np.uint8)
 
-        # 均匀采样 16 帧
+        # Uniform sampling of 16 frames
         indices = np.linspace(0, len(frames) - 1, NUM_FRAMES).astype(int)
         sampled_frames = np.array([frames[i] for i in indices])
         return sampled_frames
@@ -63,26 +63,26 @@ class IndustrialVideoDataset(Dataset):
         video_path = os.path.join(self.video_dir, file_name_avi)
         label = self.label_to_int[self.labels_df.iloc[idx, 1]]
         
-        # 加载视频
+        # Load video
         buffer = self.load_video(video_path) # (T, H, W, C)
         
-        # 转为 Tensor: (T, H, W, C) -> (C, T, H, W)
+        # Convert to Tensor: (T, H, W, C) -> (C, T, H, W)
         buffer = torch.FloatTensor(buffer).permute(3, 0, 1, 2)
         buffer = buffer / 255.0 
         
-        # 🛠️ [核心修复] 手动归一化，替代 transforms.Normalize
-        # Kinetics-400 均值和方差
+        # 🛠️ Core Fix: Manual normalization to replace transforms.Normalize
+        # Kinetics-400 mean & std
         mean = torch.tensor([0.432, 0.394, 0.376]).view(3, 1, 1, 1)
         std = torch.tensor([0.228, 0.221, 0.217]).view(3, 1, 1, 1)
         buffer = (buffer - mean) / std
 
         return buffer, torch.tensor(label, dtype=torch.long)
 
-# --- 2. 训练主流程 ---
+# --- 2. Main Training Loop ---
 if __name__ == "__main__":
-    print(f"🚀 RGB 训练 (修复版) | 设备: {device}")
+    print(f"🚀 RGB Training (Fixed Version) | Device: {device}")
     
-    # 显存清理
+    # Clear GPU memory
     torch.cuda.empty_cache()
 
     train_dataset = IndustrialVideoDataset(CSV_FILE, VIDEO_FOLDER)
@@ -91,11 +91,11 @@ if __name__ == "__main__":
     val_size = len(train_dataset) - train_size
     train_set, val_set = torch.utils.data.random_split(train_dataset, [train_size, val_size])
     
-    # Windows下 num_workers=0 最稳，如果想快一点可以尝试 =2
+    # On Windows, num_workers=0 is the safest; set to 2 for speed if desired
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
     val_loader = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
     
-    print("🧠 加载 R2Plus1D (Kinetics-400 Pretrained)...")
+    print("🧠 Loading R2Plus1D (Kinetics-400 Pretrained)...")
     model = models.r2plus1d_18(weights=models.R2Plus1D_18_Weights.KINETICS400_V1)
     model.fc = nn.Linear(model.fc.in_features, train_dataset.num_classes)
     model = model.to(device)
@@ -104,10 +104,10 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss()
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=5, factor=0.5)
     
-    # 混合精度 Scaler
+    # Mixed precision scaler
     scaler = GradScaler()
 
-    print("🔥 开始训练...")
+    print("🔥 Training Starts...")
     best_acc = 0.0
     
     for epoch in range(EPOCHS):
@@ -118,15 +118,15 @@ if __name__ == "__main__":
         for i, (inputs, labels) in enumerate(train_loader):
             inputs, labels = inputs.to(device), labels.to(device)
             
-            # 🟢 混合精度前向
+            # 🟢 Mixed-precision forward
             with autocast():
                 outputs = model(inputs)
                 loss = criterion(outputs, labels) / ACCUMULATION_STEPS
             
-            # 🟢 混合精度反向
+            # 🟢 Mixed-precision backward
             scaler.scale(loss).backward()
             
-            # 梯度累积更新
+            # Gradient accumulation update
             if (i + 1) % ACCUMULATION_STEPS == 0:
                 scaler.step(optimizer)
                 scaler.update()
@@ -137,7 +137,7 @@ if __name__ == "__main__":
             if (i+1) % 50 == 0:
                 print(f"  Step {i+1}/{len(train_loader)} | Loss: {loss.item()*ACCUMULATION_STEPS:.4f}")
         
-        # 验证
+        # Validation
         model.eval()
         correct = 0
         total = 0
@@ -159,6 +159,6 @@ if __name__ == "__main__":
         if val_acc > best_acc:
             best_acc = val_acc
             torch.save(model.state_dict(), "best_model_rgb.pth")
-            print(f"  💾 新高分: {best_acc:.2f}%")
+            print(f"  💾 New Best Accuracy: {best_acc:.2f}%")
 
-    print(f"🏆 最终结果: {best_acc:.2f}%")
+    print(f"🏆 Final Accuracy: {best_acc:.2f}%")

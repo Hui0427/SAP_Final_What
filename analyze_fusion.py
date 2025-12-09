@@ -11,28 +11,28 @@ import torchvision.models.video as models
 from torch.utils.data import Dataset, DataLoader
 
 # =========================================================================
-# ⚙️ 配置区域
+# ⚙️ Configuration
 # =========================================================================
 SKELETON_MODEL_PATH = "best_model_v3.pth"
 RGB_MODEL_PATH = "best_model_rgb.pth"
 
-# 注意：这里我们使用【训练集】的路径来进行验证
+# NOTE: We use the training set here to simulate validation
 TRAIN_VIDEO_DIR = "train_set"
 TRAIN_SKELETON_DIR = "skeleton_data/train"
 CSV_FILE = "annotations/train_set_labels.csv"
 
-# 融合权重
+# Fusion weights
 ALPHA_RGB = 0.8
 ALPHA_SKELETON = 0.2
 
-BATCH_SIZE = 8  # 验证时不反向传播，可以稍微大点
+BATCH_SIZE = 8  # No backprop during validation, can be slightly larger
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # =========================================================================
-# 🏗️ 模型定义 & 数据处理 (复用之前的逻辑)
+# 🏗️ Model Definition & Data Processing (same logic as training)
 # =========================================================================
 
-# --- 1. 骨架模型 ---
+# --- 1. Skeleton Model ---
 class LightweightCNNLSTM(nn.Module):
     def __init__(self, input_size, hidden_size, num_classes):
         super(LightweightCNNLSTM, self).__init__()
@@ -52,7 +52,7 @@ class LightweightCNNLSTM(nn.Module):
         pooled = torch.mean(attn_out, dim=1)
         return self.fc(pooled)
 
-# --- 2. 双模态数据集类 ---
+# --- 2. Dual-Stream Dataset ---
 class DualStreamDataset(Dataset):
     def __init__(self, csv_path, video_dir, skeleton_dir):
         self.labels_df = pd.read_csv(csv_path, header=None)
@@ -65,13 +65,13 @@ class DualStreamDataset(Dataset):
         return len(self.labels_df)
 
     def load_skeleton(self, file_id):
-        # 骨架处理逻辑 (train_model_v3.py)
+        # Skeleton preprocessing logic (same as train_model_v3.py)
         path = os.path.join(self.skeleton_dir, file_id + ".npy")
         if not os.path.exists(path): return torch.zeros((100, 99))
         raw = np.load(path)
         if raw.shape[0] == 0: return torch.zeros((100, 99))
         
-        # Norm
+        # Normalize
         frames = raw.shape[0]
         data = raw.reshape(frames, 33, 4)[:, :, :3]
         root = (data[:, 23, :] + data[:, 24, :]) / 2
@@ -88,7 +88,7 @@ class DualStreamDataset(Dataset):
         return torch.FloatTensor(data)
 
     def load_video(self, file_id):
-        # RGB处理逻辑 (rgb_model.py)
+        # RGB processing logic (same as rgb_model.py)
         path = os.path.join(self.video_dir, file_id + ".avi")
         cap = cv2.VideoCapture(path)
         frames = []
@@ -121,32 +121,32 @@ class DualStreamDataset(Dataset):
         return skel, rgb, label
 
 # =========================================================================
-# 🚀 主程序：验证融合效果
+# 🚀 Main Program: Validate Fusion Accuracy
 # =========================================================================
 if __name__ == "__main__":
-    print(f"📊 启动本地验证 (Validation Split) | 设备: {device}")
+    print(f"📊 Starting local validation | Device: {device}")
     
-    # 1. 准备验证集 (随机采样 20%，模拟真实分布)
+    # 1. Create validation split (random 20% of full dataset)
     full_dataset = DualStreamDataset(CSV_FILE, TRAIN_VIDEO_DIR, TRAIN_SKELETON_DIR)
     dataset_len = len(full_dataset)
     indices = list(range(dataset_len))
     
-    # 🌟 [关键修正] 打乱顺序，确保验证集覆盖所有类别
-    np.random.seed(42) # 固定种子，保证每次运行结果一致
+    # Shuffle for balanced validation
+    np.random.seed(42)
     np.random.shuffle(indices)
     
     split = int(0.8 * dataset_len)
-    val_indices = indices[split:] # 现在这是随机的 20% 了
+    val_indices = indices[split:]
     
     val_loader = DataLoader(full_dataset, batch_size=BATCH_SIZE, 
                             sampler=torch.utils.data.SubsetRandomSampler(val_indices),
-                            num_workers=0) # Windows建议0
+                            num_workers=0)
     
     num_classes = len(full_dataset.unique_labels)
-    print(f"📉 验证集大小: {len(val_indices)} 样本")
+    print(f"📉 Validation set size: {len(val_indices)} samples")
 
-    # 2. 加载模型
-    print("🧠 加载模型...")
+    # 2. Load models
+    print("🧠 Loading models...")
     # Skeleton
     skel_model = LightweightCNNLSTM(99, 128, num_classes).to(device)
     skel_model.load_state_dict(torch.load(SKELETON_MODEL_PATH, map_location=device))
@@ -159,8 +159,8 @@ if __name__ == "__main__":
     rgb_model.to(device)
     rgb_model.eval()
 
-    # 3. 开始推理
-    print("🔥 开始融合推理...")
+    # 3. Start inference
+    print("🔥 Running fusion inference...")
     all_preds = []
     all_labels = []
     
@@ -173,14 +173,11 @@ if __name__ == "__main__":
         for i, (skel_in, rgb_in, labels) in enumerate(val_loader):
             skel_in, rgb_in, labels = skel_in.to(device), rgb_in.to(device), labels.to(device)
             
-            # 分别预测
             skel_out = torch.softmax(skel_model(skel_in), dim=1)
             rgb_out = torch.softmax(rgb_model(rgb_in), dim=1)
             
-            # 融合
             fusion_out = (ALPHA_RGB * rgb_out) + (ALPHA_SKELETON * skel_out)
             
-            # 统计
             _, skel_pred = torch.max(skel_out, 1)
             _, rgb_pred = torch.max(rgb_out, 1)
             _, fusion_pred = torch.max(fusion_out, 1)
@@ -193,18 +190,19 @@ if __name__ == "__main__":
             all_preds.extend(fusion_pred.cpu().numpy())
             all_labels.extend(labels.cpu().numpy())
             
-            if (i+1) % 10 == 0: print(f"  Batch {i+1} done...")
+            if (i+1) % 10 == 0: 
+                print(f"  Batch {i+1} done...")
 
-    # 4. 输出结果
+    # 4. Print results
     print("-" * 40)
-    print(f"🏆 本地验证结果 (Val Set N={total})")
+    print(f"🏆 Validation Results (Val Set N={total})")
     print("-" * 40)
-    print(f"🦴 单骨架模型准确率: {100 * skel_correct / total:.2f}%")
-    print(f"🎨 单RGB模型准确率:  {100 * rgb_correct / total:.2f}%")
-    print(f"🚀 双流融合准确率:   {100 * fusion_correct / total:.2f}%")
+    print(f"🦴 Skeleton-only accuracy: {100 * skel_correct / total:.2f}%")
+    print(f"🎨 RGB-only accuracy:      {100 * rgb_correct / total:.2f}%")
+    print(f"🚀 Fusion accuracy:         {100 * fusion_correct / total:.2f}%")
     print("-" * 40)
     
-    # 5. 画图
+    # 5. Plot matrix
     cm = confusion_matrix(all_labels, all_preds)
     plt.figure(figsize=(12, 10))
     sns.heatmap(cm, annot=False, cmap='Blues', 
@@ -214,4 +212,4 @@ if __name__ == "__main__":
     plt.xticks(rotation=90)
     plt.tight_layout()
     plt.savefig('fusion_analysis.png')
-    print("✅ 融合混淆矩阵已保存为 fusion_analysis.png")
+    print("✅ Fusion confusion matrix saved as fusion_analysis.png")

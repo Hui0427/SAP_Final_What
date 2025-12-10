@@ -656,7 +656,7 @@ This YOLO11 + XGBoost approach further confirms that:
 * combining **motion cues (skeleton)** and **context (RGB)** provides the best overall performance
 
 ---
-## 5. Justification of Design Choices (for Justification Rubric)
+## 5. Justification of Design Choices
 
 Here we explicitly justify why we chose this architecture and compare it to alternatives, following the marking scheme expectations for a high justification score.
 
